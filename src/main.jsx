@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight, BarChart3, Bell, Box, Check, ChevronDown, ChevronLeft,
-  ChevronRight, CircleUserRound, CreditCard, Heart, LayoutDashboard,
+  ChevronRight, CreditCard, Heart, LayoutDashboard,
   LogOut, Menu, Package, Plus, Search, Settings, ShoppingBag, ShoppingCart,
   Star, Tag, Trash2, TrendingUp, Truck, Users, X
 } from "lucide-react";
@@ -22,13 +22,13 @@ const products = [
 const money = n => new Intl.NumberFormat("vi-VN",{style:"currency",currency:"VND",maximumFractionDigits:0}).format(n);
 
 function useHashRoute(){
-  const getRoute=()=>window.location.pathname==="/admin" || window.location.pathname.startsWith("/admin/") ? "#/admin" : (window.location.hash || "#/");
+  const getRoute=()=>window.location.pathname.startsWith("/admin") ? window.location.pathname : (window.location.hash || "#/");
   const [route,setRoute]=useState(getRoute());
   useEffect(()=>{ const f=()=>setRoute(getRoute()); window.addEventListener("hashchange",f); window.addEventListener("popstate",f); return()=>{window.removeEventListener("hashchange",f);window.removeEventListener("popstate",f)}},[]);
   return route;
 }
 
-function Header({cartCount,onCart}){
+function Header({cartCount,onCart,onLogout}){
   const [search,setSearch]=useState("");
   return <header className="header">
     <div className="container nav">
@@ -38,8 +38,9 @@ function Header({cartCount,onCart}){
       </nav>
       <div className="nav-actions">
         <div className="search-mini"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(window.location.hash="#/shop")} placeholder="Tìm sản phẩm..."/></div>
-        <a className="icon-btn" href="/admin" title="Admin"><LayoutDashboard size={19}/></a>
+        <a className="icon-btn" href="/admin/login" title="Admin"><LayoutDashboard size={19}/></a>
         <button className="icon-btn cart-btn" onClick={onCart}><ShoppingCart size={19}/>{cartCount>0&&<b>{cartCount}</b>}</button>
+        <button className="icon-btn" onClick={onLogout} title="Đăng xuất"><LogOut size={19}/></button>
       </div>
     </div>
   </header>
@@ -52,6 +53,42 @@ function ProductCard({p,onAdd}){
   </article>
 }
 
+function Login({admin=false}){
+  const [email,setEmail]=useState("");
+  const [password,setPassword]=useState("");
+  const [showPassword,setShowPassword]=useState(false);
+  const [error,setError]=useState("");
+
+  const submit=e=>{
+    e.preventDefault();
+    if(!email.trim() || !password.trim()){ setError("Vui lòng nhập đầy đủ thông tin"); return; }
+    localStorage.setItem(admin ? "hai_admin_auth" : "hai_customer_auth", "1");
+    window.location.href=admin ? "/admin" : "/";
+  };
+
+  return <main className="login-page">
+    <div className="login-visual">
+      <img src="https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=1200&q=90"/>
+      <div className="login-visual-overlay"><span className="eyebrow">{admin ? "LUMA ADMIN" : "LUMA MEMBER"}</span><h1>{admin ? "Quản trị<br/><em>đơn giản hơn.</em>" : "Chào mừng trở lại"}</h1><p>{admin ? "Quản lý cửa hàng, đơn hàng và sản phẩm trong một không gian trực quan." : "Đăng nhập để theo dõi đơn hàng và tận hưởng trải nghiệm mua sắm dành riêng cho bạn."}</p></div>
+    </div>
+    <section className="login-card-wrap">
+      <a href={admin ? "/" : "/"} className="logo login-logo"><span className="logo-mark">H</span>HAI</a>
+      <div className="login-card">
+        <div className="login-heading"><span className="eyebrow">{admin ? "ADMIN ACCESS" : "WELCOME BACK"}</span><h2>{admin ? "Đăng nhập quản trị" : "Đăng nhập tài khoản"}</h2><p>{admin ? "Nhập bất kỳ tài khoản nào để truy cập trang quản trị" : "Nhập thông tin tài khoản để tiếp tục mua sắm"}</p></div>
+        <form onSubmit={submit} className="login-form">
+          <label>Email hoặc tài khoản<input autoFocus value={email} onChange={e=>{setEmail(e.target.value);setError("")}} placeholder={admin ? "admin@hai.vn" : "you@example.com"} autoComplete="username"/></label>
+          <label>Mật khẩu<div className="password-field"><input type={showPassword ? "text" : "password"} value={password} onChange={e=>{setPassword(e.target.value);setError("")}} placeholder="••••••••" autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? "Ẩn" : "Hiện"}</button></div></label>
+          {error&&<div className="login-error">{error}</div>}
+          <div className="login-options"><label className="remember"><input type="checkbox"/> Ghi nhớ đăng nhập</label><a href="#" onClick={e=>e.preventDefault()}>Quên mật khẩu?</a></div>
+          <button className="primary login-submit" type="submit">Đăng nhập <ArrowRight size={18}/></button>
+        </form>
+        {!admin&&<p className="login-switch">Chưa có tài khoản? <a href="#" onClick={e=>e.preventDefault()}>Tạo tài khoản</a></p>}
+        {admin&&<p className="login-switch">Không cần tài khoản cố định · Có thể dùng bất kỳ thông tin đăng nhập nào</p>}
+      </div>
+    </section>
+  </main>
+}
+
 function Customer({cart,setCart}){
   const [cartOpen,setCartOpen]=useState(false);
   const [toast,setToast]=useState("");
@@ -61,9 +98,10 @@ function Customer({cart,setCart}){
   const params=new URLSearchParams(route.split("?")[1]||"");
   const category=params.get("cat");
   const visible=useMemo(()=>products.filter(p=>!category||p.category===category),[category]);
+  const logout=()=>{localStorage.removeItem("hai_customer_auth");window.location.href="/login"};
 
   return <div>
-    <Header cartCount={cart.length} onCart={()=>setCartOpen(true)}/>
+    <Header cartCount={cart.length} onCart={()=>setCartOpen(true)} onLogout={logout}/>
     {!isShop ? <Home onAdd={add}/> : <Shop products={visible} category={category} onAdd={add}/>}
     {cartOpen&&<CartDrawer cart={cart} setCart={setCart} close={()=>setCartOpen(false)}/>}
     {toast&&<div className="toast"><Check size={18}/>{toast}</div>}
@@ -98,7 +136,7 @@ function Admin(){
   const nav=[
     ["overview","Tổng quan",LayoutDashboard],["orders","Đơn hàng",ShoppingBag],["products","Sản phẩm",Package],["customers","Khách hàng",Users],["analytics","Phân tích",BarChart3]
   ];
-  return <div className="admin-shell"><aside className="admin-side"><a href="#/" className="logo admin-logo"><span className="logo-mark">L</span>LUMA</a><div className="admin-label">QUẢN TRỊ</div>{nav.map(([id,label,Icon])=><button key={id} className={section===id?"admin-nav active":"admin-nav"} onClick={()=>setSection(id)}><Icon size={18}/>{label}</button>)}<div className="side-bottom"><button className="admin-nav"><Settings size={18}/>Cài đặt</button><a className="admin-nav" href="#/"><LogOut size={18}/>Về cửa hàng</a></div></aside><main className="admin-main"><div className="admin-top"><div><span className="eyebrow">MONDAY · 11 SEPTEMBER 2026</span><h1>{nav.find(x=>x[0]===section)?.[1]}</h1></div><div className="admin-user"><button className="icon-btn"><Bell size={18}/></button><span>HA</span><div><b>Hải Admin</b><small>Administrator</small></div><ChevronDown size={16}/></div></div>{section==="overview"&&<Dashboard inventory={inventory}/>} {section==="orders"&&<Orders/>}{section==="products"&&<Products inventory={inventory} setInventory={setInventory} openAdd={()=>setShowAdd(true)}/>} {section==="customers"&&<Customers/>}{section==="analytics"&&<Analytics/>}</main>{showAdd&&<AddProduct close={()=>setShowAdd(false)} add={p=>{setInventory(x=>[{...p,id:Date.now()},...x]);setShowAdd(false);setNotice("Đã thêm sản phẩm mới")}}/>}{notice&&<div className="toast"><Check size={18}/>{notice}</div>}</div>
+  return <div className="admin-shell"><aside className="admin-side"><a href="#/" className="logo admin-logo"><span className="logo-mark">L</span>LUMA</a><div className="admin-label">QUẢN TRỊ</div>{nav.map(([id,label,Icon])=><button key={id} className={section===id?"admin-nav active":"admin-nav"} onClick={()=>setSection(id)}><Icon size={18}/>{label}</button>)}<div className="side-bottom"><button className="admin-nav"><Settings size={18}/>Cài đặt</button><button className="admin-nav" onClick={()=>{localStorage.removeItem("hai_admin_auth");window.location.href="/admin/login"}}><LogOut size={18}/>Đăng xuất</button></div></aside><main className="admin-main"><div className="admin-top"><div><span className="eyebrow">MONDAY · 11 SEPTEMBER 2026</span><h1>{nav.find(x=>x[0]===section)?.[1]}</h1></div><div className="admin-user"><button className="icon-btn"><Bell size={18}/></button><span>HA</span><div><b>Hải Admin</b><small>Administrator</small></div><ChevronDown size={16}/></div></div>{section==="overview"&&<Dashboard inventory={inventory}/>} {section==="orders"&&<Orders/>}{section==="products"&&<Products inventory={inventory} setInventory={setInventory} openAdd={()=>setShowAdd(true)}/>} {section==="customers"&&<Customers/>}{section==="analytics"&&<Analytics/>}</main>{showAdd&&<AddProduct close={()=>setShowAdd(false)} add={p=>{setInventory(x=>[{...p,id:Date.now()},...x]);setShowAdd(false);setNotice("Đã thêm sản phẩm mới")}}/>}{notice&&<div className="toast"><Check size={18}/>{notice}</div>}</div>
 }
 
 function Dashboard({inventory}){
@@ -117,6 +155,17 @@ function Analytics(){return <div className="analytics-cards"><div className="pan
 
 function AddProduct({close,add}){const [name,setName]=useState("");const [price,setPrice]=useState("");return <div className="modal-bg"><div className="modal"><div className="modal-head"><div><span className="eyebrow">INVENTORY</span><h2>Thêm sản phẩm</h2></div><button className="icon-btn" onClick={close}><X/></button></div><label>Tên sản phẩm<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ví dụ: Urban Shirt"/></label><label>Giá bán<input value={price} onChange={e=>setPrice(e.target.value)} placeholder="990000"/></label><label>Danh mục<select><option>Thời trang</option><option>Giày</option><option>Phụ kiện</option></select></label><div className="modal-actions"><button className="secondary" onClick={close}>Hủy</button><button className="primary" disabled={!name||!price} onClick={()=>add({name,price:+price,old:+price,category:"Thời trang",rating:5,image:products[4].image,tag:"Mới"})}>Thêm sản phẩm</button></div></div></div>}
 
-function App(){const [cart,setCart]=useState([]);const route=useHashRoute();return route.startsWith("#/admin")?<Admin/>:<Customer cart={cart} setCart={setCart}/>}
+function App(){
+  const [cart,setCart]=useState([]);
+  const route=useHashRoute();
+  const adminPath=window.location.pathname.startsWith("/admin");
+  const customerAuthed=typeof window!=="undefined" && localStorage.getItem("hai_customer_auth")==="1";
+
+  if(adminPath && window.location.pathname==="/admin/login") return <Login admin/>;
+  if(adminPath) return <Admin/>;
+  if(window.location.pathname==="/login") return <Login/>;
+  if(!customerAuthed){ window.location.replace("/login"); return null; }
+  return <Customer cart={cart} setCart={setCart}/>;
+}
 
 createRoot(document.getElementById("root")).render(<App/>);
