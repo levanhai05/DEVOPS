@@ -37,34 +37,5 @@ jobs:
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USERNAME }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          script: |
-            # Login to Docker Hub trên server
-            echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-
-            # Pull image mới nhất
-            docker pull ${{ secrets.DOCKER_USERNAME }}/hai-shop-fe:latest
-
-            # Dừng và xoá container cũ (nếu có)
-            docker stop hai-shop-fe || true
-            docker rm hai-shop-fe || true
-
-            # Chạy container mới, map cổng 80 của nginx trong image ra cổng 8080 của server
-            docker run -d \
-              --name hai-shop-fe \
-              --restart always \
-              -p 8080:80 \
-              ${{ secrets.DOCKER_USERNAME }}/hai-shop-fe:latest
-
-            # Dọn dẹp image cũ không dùng nữa
-            docker image prune -f
+# Không có job deploy: Render tự build và deploy thẳng từ Dockerfile trong repo GitHub này.
+# Job build-and-push ở trên chỉ dùng để lưu image lên Docker Hub (backup/versioning), không phục vụ deploy.
