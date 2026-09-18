@@ -1,4 +1,4 @@
-# LUMA Shop — Frontend Demo
+# HAI Shop — Frontend Demo
 
 Dự án FE bán hàng gồm 2 khu vực có thể bấm và chuyển đổi trực tiếp:
 
