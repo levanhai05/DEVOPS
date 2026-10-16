@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 COPY . .
+# Để trống = gọi API cùng domain (/api, nginx proxy). Đặt URL đầy đủ nếu API ở domain khác, vd: https://hai-shop-api.onrender.com
+ARG VITE_API_URL=""
+ENV VITE_API_URL=$VITE_API_URL
 RUN npm run build
 
 # Stage 2: Serve with nginx
