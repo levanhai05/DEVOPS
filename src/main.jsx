@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   ArrowRight, BarChart3, Bell, Box, Check, ChevronLeft,
@@ -6,6 +6,7 @@ import {
   LogOut, Mail, Menu, MapPin, Package, Pencil, Phone, Plus, Search, ShoppingBag, ShoppingCart,
   Star, Tag, Trash2, TrendingUp, Truck, User, Users, X
 } from "lucide-react";
+import { api, useFetch, setSession, setToken, clearSession, uploadImage } from "./api";
 import "./styles.css";
 
 const seedProducts = [
@@ -41,8 +42,27 @@ function useHashRoute(){
   return route;
 }
 
-function Header({cartCount,wishCount,onLogout,customerAuthed}){
-  const [search,setSearch]=useState("");
+const PAGE_SIZE=12;
+const normText=s=>String(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/g,"d");
+const matchQuery=(p,q)=>{
+  const words=normText(q).split(/\s+/).filter(Boolean);
+  if(!words.length) return true;
+  const hay=normText(`${p.name} ${p.category} ${p.tag}`);
+  return words.every(w=>hay.includes(w));
+};
+const shopHref=({cat,q,page}={})=>{
+  const sp=new URLSearchParams();
+  if(cat) sp.set("cat",cat);
+  if(q) sp.set("q",q);
+  if(page>1) sp.set("page",page);
+  const qs=sp.toString();
+  return "#/shop"+(qs?"?"+qs:"");
+};
+
+function Header({cartCount,wishCount,onLogout,customerAuthed,query=""}){
+  const [search,setSearch]=useState(query);
+  useEffect(()=>{setSearch(query)},[query]);
+  const submitSearch=()=>{ window.location.hash=shopHref({q:search.trim()}); };
   return <header className="header">
     <div className="container nav">
       <a href="#/" className="logo"><span className="logo-mark">H</span>HAI</a>
@@ -53,10 +73,11 @@ function Header({cartCount,wishCount,onLogout,customerAuthed}){
         <a href="#/contact">Liên hệ</a>
       </nav>
       <div className="nav-actions">
-        <div className="search-mini"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&(window.location.hash="#/shop")} placeholder="Tìm sản phẩm..."/></div>
+        <div className="search-mini"><button type="button" className="search-go" onClick={submitSearch} title="Tìm kiếm"><Search size={17}/></button><input value={search} onChange={e=>setSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&submitSearch()} placeholder="Tìm sản phẩm..."/></div>
         <a className="icon-btn cart-btn" href="#/cart"><ShoppingCart size={19}/>{cartCount>0&&<b>{cartCount}</b>}</a>
         {customerAuthed
           ? <>
+              <a className="icon-btn" href="#/orders" title="Đơn hàng của tôi"><Package size={19}/></a>
               <a className="icon-btn" href="#/profile" title="Hồ sơ cá nhân"><User size={19}/></a>
               <button className="icon-btn" onClick={onLogout} title="Đăng xuất"><LogOut size={19}/></button>
             </>
@@ -86,18 +107,21 @@ const seedReviews=[
 
 function ProductDetail({id,products,onAdd,onWish,wished,stock}){
   const p=products.find(x=>x.id===Number(id));
-  const [reviews,setReviews]=useLocalState("hai_reviews_"+id,seedReviews);
+  const {data:reviews,setData:setReviews}=useFetch(`/products/${id}/reviews`,[]);
   const [name,setName]=useState("");
   const [comment,setComment]=useState("");
   const [rating,setRating]=useState(5);
   if(!p) return <main className="shop-page"><div className="container"><p>Không tìm thấy sản phẩm.</p><a href="#/shop" className="text-link"><ChevronLeft size={16}/> Về cửa hàng</a></div></main>;
   const outOfStock=stock!==undefined && stock<=0;
   const avgRating=reviews.length ? (reviews.reduce((s,r)=>s+r.rating,0)/reviews.length).toFixed(1) : p.rating;
-  const submitReview=e=>{
+  const submitReview=async e=>{
     e.preventDefault();
     if(!name.trim()||!comment.trim()) return;
-    setReviews(r=>[{id:Date.now(),name:name.trim(),rating,comment:comment.trim(),date:new Date().toLocaleDateString("vi-VN")},...r]);
-    setName("");setComment("");setRating(5);
+    try{
+      const created=await api(`/products/${id}/reviews`,{method:"POST",body:{name:name.trim(),rating,comment:comment.trim()}});
+      setReviews(r=>[created,...r]);
+      setName("");setComment("");setRating(5);
+    }catch(err){ alert(err.message); }
   };
   return <main className="shop-page">
     <div className="container product-detail">
@@ -136,7 +160,7 @@ function ProductDetail({id,products,onAdd,onWish,wished,stock}){
             {reviews.map(r=><div className="review-card" key={r.id}>
               <div className="review-head">
                 <span className="avatar">{r.name.trim().split(" ").map(x=>x[0]).slice(-2).join("").toUpperCase()}</span>
-                <div><b>{r.name}</b><small>{r.date}</small></div>
+                <div><b>{r.name}</b><small>{new Date(r.date).toLocaleDateString("vi-VN")}</small></div>
                 <div className="review-stars">{[1,2,3,4,5].map(n=><Star key={n} size={13} fill={n<=r.rating?"currentColor":"none"}/>)}</div>
               </div>
               <p>{r.comment}</p>
@@ -153,13 +177,28 @@ function Login({admin=false}){
   const [password,setPassword]=useState("");
   const [showPassword,setShowPassword]=useState(false);
   const [error,setError]=useState("");
+  const [mode,setMode]=useState("login");
+  const [fullName,setFullName]=useState("");
+  const register=!admin && mode==="register";
+  const forgot=mode==="forgot";
+  const [info,setInfo]=useState("");
 
-  const submit=e=>{
+  const submit=async e=>{
     e.preventDefault();
-    if(!email.trim() || !password.trim()){ setError("Vui lòng nhập đầy đủ thông tin"); return; }
-    localStorage.setItem(admin ? "hai_admin_auth" : "hai_customer_auth", "1");
-    if(!admin) localStorage.setItem("hai_customer_email", email.trim());
-    window.location.href=admin ? "/admin" : "/";
+    if(forgot){
+      if(!email.trim()){ setError("Vui lòng nhập email"); return; }
+      try{
+        const r=await api("/auth/forgot-password",{method:"POST",body:{email:email.trim()}});
+        setInfo(r.message);
+      }catch(err){ setError(err.message); }
+      return;
+    }
+    if(!email.trim() || !password.trim() || (register && !fullName.trim())){ setError("Vui lòng nhập đầy đủ thông tin"); return; }
+    try{
+      const data=await api(admin ? "/auth/admin/login" : register ? "/auth/register" : "/auth/login",{method:"POST",body:{email:email.trim(),password,name:fullName.trim()}});
+      setSession(admin ? "admin" : "customer", data);
+      window.location.href=admin ? "/admin" : "/";
+    }catch(err){ setError(err.message); }
   };
 
   return <main className="login-page">
@@ -171,16 +210,19 @@ function Login({admin=false}){
       {admin&&<a href="/" className="text-link back-home"><ChevronLeft size={16}/> Về trang chủ</a>}
       <a href={admin ? "/" : "/"} className="logo login-logo"><span className="logo-mark">H</span>HAI</a>
       <div className="login-card">
-        <div className="login-heading"><span className="eyebrow">{admin ? "ADMIN ACCESS" : "WELCOME BACK"}</span><h2>{admin ? "Đăng nhập quản trị" : "Đăng nhập tài khoản"}</h2><p>{admin ? "Nhập bất kỳ tài khoản nào để truy cập trang quản trị" : "Nhập thông tin tài khoản để tiếp tục mua sắm"}</p></div>
+        <div className="login-heading"><span className="eyebrow">{admin ? "ADMIN ACCESS" : "WELCOME BACK"}</span><h2>{admin ? "Đăng nhập quản trị" : "Đăng nhập tài khoản"}</h2><p>{admin ? "Đăng nhập bằng tài khoản quản trị" : forgot ? "Nhập email để nhận liên kết đặt lại mật khẩu" : register ? "Tạo tài khoản để bắt đầu mua sắm" : "Nhập thông tin tài khoản để tiếp tục mua sắm"}</p></div>
         <form onSubmit={submit} className="login-form">
+          {register&&<label>Họ tên<input value={fullName} onChange={e=>{setFullName(e.target.value);setError("")}} placeholder="Nguyễn Văn A" autoComplete="name"/></label>}
           <label>Email hoặc tài khoản<input autoFocus value={email} onChange={e=>{setEmail(e.target.value);setError("")}} placeholder={admin ? "admin@hai.vn" : "you@example.com"} autoComplete="username"/></label>
-          <label>Mật khẩu<div className="password-field"><input type={showPassword ? "text" : "password"} value={password} onChange={e=>{setPassword(e.target.value);setError("")}} placeholder="••••••••" autoComplete="current-password"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? "Ẩn" : "Hiện"}</button></div></label>
+          {!forgot&&<label>Mật khẩu<div className="password-field"><input type={showPassword ? "text" : "password"} value={password} onChange={e=>{setPassword(e.target.value);setError("")}} placeholder="••••••••" autoComplete={register ? "new-password" : "current-password"}/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? "Ẩn" : "Hiện"}</button></div></label>}
           {error&&<div className="login-error">{error}</div>}
-          <div className="login-options"><label className="remember"><input type="checkbox"/> Ghi nhớ đăng nhập</label><a href="#" onClick={e=>e.preventDefault()}>Quên mật khẩu?</a></div>
-          <button className="primary login-submit" type="submit">Đăng nhập <ArrowRight size={18}/></button>
+          {info&&<div className="login-error" style={{background:"#edf5e7",color:"#648044"}}>{info}</div>}
+          <div className="login-options"><label className="remember"><input type="checkbox"/> Ghi nhớ đăng nhập</label>{!forgot&&<a href="#" onClick={e=>{e.preventDefault();setMode("forgot");setError("");setInfo("")}}>Quên mật khẩu?</a>}</div>
+          <button className="primary login-submit" type="submit">{forgot ? "Gửi liên kết" : register ? "Tạo tài khoản" : "Đăng nhập"} <ArrowRight size={18}/></button>
         </form>
-        {!admin&&<p className="login-switch">Chưa có tài khoản? <a href="#" onClick={e=>e.preventDefault()}>Tạo tài khoản</a></p>}
-        {admin&&<p className="login-switch">Không cần tài khoản cố định · Có thể dùng bất kỳ thông tin đăng nhập nào</p>}
+        {forgot&&<p className="login-switch"><a href="#" onClick={e=>{e.preventDefault();setMode("login");setError("");setInfo("")}}>Quay lại đăng nhập</a></p>}
+        {!admin&&!forgot&&<p className="login-switch">{register ? "Đã có tài khoản?" : "Chưa có tài khoản?"} <a href="#" onClick={e=>{e.preventDefault();setMode(register?"login":"register");setError("")}}>{register ? "Đăng nhập" : "Tạo tài khoản"}</a></p>}
+        {admin&&<p className="login-switch">Khu vực dành riêng cho quản trị viên</p>}
       </div>
     </section>
   </main>
@@ -191,9 +233,9 @@ function Customer({cart,setCart,customerAuthed}){
   const [showLoginPrompt,setShowLoginPrompt]=useState(false);
   const [wishlist,setWishlist]=useLocalState("hai_wishlist",[]);
   const [lastOrder,setLastOrder]=useLocalState("hai_last_order",null);
-  const [orders,setOrders]=useLocalState("hai_orders",[]);
-  const [stock,setStock]=useLocalState("hai_stock",defaultStock);
-  const [products]=useLocalState("hai_products",seedProducts);
+  const {data:catalog,reload:reloadCatalog}=useFetch("/products",[]);
+  const products=useMemo(()=>catalog.map(({stock:_s,...p})=>p),[catalog]);
+  const stock=useMemo(()=>Object.fromEntries(catalog.map(p=>[p.id,p.stock])),[catalog]);
   const add=p=>{
     if(!customerAuthed){ setShowLoginPrompt(true); return; }
     const available=stock[p.id];
@@ -212,29 +254,18 @@ function Customer({cart,setCart,customerAuthed}){
   const setQty=(id,qty)=>setCart(c=> qty<=0 ? c.filter(x=>x.id!==id) : c.map(x=>x.id===id ? {...x,qty} : x));
   const removeFromCart=id=>setCart(c=>c.filter(x=>x.id!==id));
   const cartCount=cart.reduce((s,p)=>s+p.qty,0);
-  const checkout=(total,items)=>{
+  const checkout=async(total,items,code)=>{
     if(!items.length) return;
-    const email=(typeof window!=="undefined" && localStorage.getItem("hai_customer_email")) || "";
-    const name=(typeof window!=="undefined" && localStorage.getItem("hai_customer_name")) || (email ? email.split("@")[0] : "Khách hàng");
-    const order={
-      id:"HAI"+Date.now().toString().slice(-6),
-      date:new Date().toISOString(),
-      total,
-      count:items.reduce((s,p)=>s+p.qty,0),
-      items:items.map(p=>({id:p.id,name:p.name,price:p.price,qty:p.qty})),
-      customerName:name,
-      customerEmail:email,
-      status:"Chờ xử lý"
-    };
-    setOrders(o=>[order,...o]);
-    setStock(s=>{
-      const next={...s};
-      items.forEach(it=>{ next[it.id]=Math.max(0,(next[it.id]??0)-it.qty); });
-      return next;
-    });
-    setLastOrder(order);
-    setCart([]);
-    window.location.hash="#/order-success";
+    try{
+      const order=await api("/orders",{method:"POST",body:{items:items.map(p=>({id:p.id,qty:p.qty})),code}});
+      setLastOrder(order);
+      setCart([]);
+      reloadCatalog();
+      window.location.hash="#/order-success";
+    }catch(err){
+      setToast(err.message);setTimeout(()=>setToast(""),2500);
+      reloadCatalog();
+    }
   };
   const toggleWish=id=>setWishlist(w=>w.includes(id) ? w.filter(x=>x!==id) : [...w,id]);
   const route=useHashRoute();
@@ -246,17 +277,22 @@ function Customer({cart,setCart,customerAuthed}){
   const isCart=route.startsWith("#/cart");
   const isOrderSuccess=route.startsWith("#/order-success");
   const isProfile=route.startsWith("#/profile");
+  const isOrders=route.startsWith("#/orders");
   const params=new URLSearchParams(route.split("?")[1]||"");
   const category=params.get("cat");
-  const visible=useMemo(()=>products.filter(p=>!category||p.category===category),[category]);
-  const logout=()=>{localStorage.removeItem("hai_customer_auth");window.location.href="/"};
+  const q=(params.get("q")||"").trim();
+  const page=Math.max(1,parseInt(params.get("page"),10)||1);
+  const visible=useMemo(()=>products.filter(p=>(!category||p.category===category)&&matchQuery(p,q)),[products,category,q]);
+  const logout=()=>{clearSession("customer");window.location.href="/"};
 
   return <div>
-    <Header cartCount={cartCount} wishCount={wishlist.length} onLogout={logout} customerAuthed={customerAuthed}/>
+    <Header cartCount={cartCount} wishCount={wishlist.length} onLogout={logout} customerAuthed={customerAuthed} query={isShop?q:""}/>
     {isProduct
       ? <ProductDetail id={route.split("/product/")[1]} products={products} onAdd={add} onWish={toggleWish} wished={wishlist.includes(Number(route.split("/product/")[1]))} stock={stock[Number(route.split("/product/")[1])]}/>
       : isOrderSuccess
       ? <OrderSuccess order={lastOrder}/>
+      : isOrders
+      ? (customerAuthed ? <MyOrders products={products}/> : <LoginPrompt close={()=>{window.location.hash="#/"}}/>)
       : isProfile
       ? (customerAuthed ? <Profile lastOrder={lastOrder}/> : <LoginPrompt close={()=>{window.location.hash="#/"}}/>)
       : isCart
@@ -267,7 +303,7 @@ function Customer({cart,setCart,customerAuthed}){
       ? <About/>
       : isContact
       ? <Contact/>
-      : !isShop ? <Home products={products} onAdd={add} onWish={toggleWish} wishlist={wishlist} stock={stock}/> : <Shop products={visible} category={category} onAdd={add} onWish={toggleWish} wishlist={wishlist} stock={stock}/>}
+      : !isShop ? <Home products={products} onAdd={add} onWish={toggleWish} wishlist={wishlist} stock={stock}/> : <Shop products={visible} category={category} q={q} page={page} onAdd={add} onWish={toggleWish} wishlist={wishlist} stock={stock}/>}
     {toast&&<div className="toast"><Check size={18}/>{toast}</div>}
     {showLoginPrompt&&<LoginPrompt close={()=>setShowLoginPrompt(false)}/>}
   </div>
@@ -287,9 +323,51 @@ function OrderSuccess({order}){
       </div>
       <div className="order-success-actions">
         <a href="#/shop" className="primary">Tiếp tục mua sắm</a>
+        <a href="#/orders" className="secondary">Đơn hàng của tôi</a>
         <a href="#/" className="secondary">Về trang chủ</a>
       </div>
     </div>
+  </div></main>
+}
+
+const ORDER_FILTERS=["Tất cả","Chờ xử lý","Đang giao","Đã giao"];
+
+function MyOrders({products}){
+  const {data:orders,loading,error,reload}=useFetch("/orders/mine",[]);
+  const [filter,setFilter]=useState("Tất cả");
+  const byId=useMemo(()=>Object.fromEntries(products.map(p=>[p.id,p])),[products]);
+  const statusClass=st=>st==="Đã giao"?"done":st==="Đang giao"?"shipping":"";
+  const list=orders.filter(o=>filter==="Tất cả"||(o.status||"Chờ xử lý")===filter);
+  return <main className="shop-page"><div className="container">
+    <div className="shop-top"><div><span className="eyebrow">TÀI KHOẢN CỦA BẠN</span><h1>Đơn hàng của tôi</h1><p>{loading?"Đang tải...":`${orders.length} đơn hàng`}</p></div></div>
+    <div className="category-pills">{ORDER_FILTERS.map(f=><a key={f} href="#/orders" className={filter===f?"active":""} onClick={e=>{e.preventDefault();setFilter(f)}}>{f}{f!=="Tất cả"&&orders.length>0?` (${orders.filter(o=>(o.status||"Chờ xử lý")===f).length})`:""}</a>)}</div>
+    {error
+      ? <div className="empty"><h3>Không tải được đơn hàng</h3><p>{error}</p><button className="primary" onClick={reload}>Thử lại</button></div>
+      : !loading && !list.length
+      ? <div className="empty"><Package size={42}/><h3>{orders.length?"Không có đơn hàng ở trạng thái này":"Bạn chưa có đơn hàng nào"}</h3><p>{orders.length?"Chọn trạng thái khác để xem các đơn còn lại.":"Hãy chọn vài món đồ ưng ý nhé."}</p><a href="#/shop" className="primary">Mua sắm ngay</a></div>
+      : <div className="orders-list">{list.map(o=>{
+          const st=o.status||"Chờ xử lý";
+          return <div className="panel" key={o.id}>
+            <div className="order-card-head">
+              <div><b>#{o.id}</b><small>{new Date(o.date).toLocaleString("vi-VN")} · {o.count} sản phẩm</small></div>
+              <span className={`status ${statusClass(st)}`}>{st}</span>
+            </div>
+            {o.items.map(it=>{
+              const prod=byId[it.id];
+              return <div className="order-line" key={it.id}>
+                {prod ? <a href={`#/product/${it.id}`}><img src={prod.image} alt={it.name}/></a> : <div className="order-line-ph"><Package size={20}/></div>}
+                <div>{prod ? <a href={`#/product/${it.id}`}><b>{it.name}</b></a> : <b>{it.name}</b>}<small>{money(it.price)} × {it.qty}</small></div>
+                <strong>{money(it.price*it.qty)}</strong>
+              </div>
+            })}
+            <div className="order-totals">
+              <div><span>Tạm tính</span><span>{money(o.subtotal)}</span></div>
+              {o.discount>0 && <div><span>Giảm giá{o.promoCode?` (${o.promoCode})`:""}</span><span>-{money(o.discount)}</span></div>}
+              <div><span>Phí vận chuyển</span><span>{o.shipping>0?money(o.shipping):"Miễn phí"}</span></div>
+              <div className="total"><span>Tổng thanh toán</span><span>{money(o.total)}</span></div>
+            </div>
+          </div>
+        })}</div>}
   </div></main>
 }
 
@@ -351,11 +429,14 @@ function Profile({lastOrder}){
   const [address,setAddress]=useState("");
   const [saved,setSaved]=useState(false);
   const initials=(name||"H").trim().split(" ").map(x=>x[0]).slice(-2).join("").toUpperCase();
-  const save=e=>{
+  useEffect(()=>{ api("/auth/me").then(u=>{setName(u.name);setEmail(u.email);setPhone(u.phone||"");setAddress(u.address||"")}).catch(()=>{}); },[]);
+  const save=async e=>{
     e.preventDefault();
-    if(email) localStorage.setItem("hai_customer_email",email);
-    if(name) localStorage.setItem("hai_customer_name",name);
-    setSaved(true);setTimeout(()=>setSaved(false),1800);
+    try{
+      const u=await api("/auth/me",{method:"PUT",body:{name,phone,address}});
+      localStorage.setItem("hai_customer_name",u.name);
+      setSaved(true);setTimeout(()=>setSaved(false),1800);
+    }catch(err){ alert(err.message); }
   };
   return <main className="shop-page"><div className="container">
     <div className="shop-top"><div><span className="eyebrow">TÀI KHOẢN CỦA BẠN</span><h1>Hồ sơ cá nhân</h1><p>Quản lý thông tin cá nhân và theo dõi đơn hàng gần nhất</p></div></div>
@@ -365,7 +446,7 @@ function Profile({lastOrder}){
         <div className="admin-user" style={{marginBottom:22}}><span className="avatar" style={{width:52,height:52,fontSize:16}}>{initials}</span><div><b style={{fontSize:15}}>{name||"Khách hàng HAI"}</b><small>{email||"Chưa có email"}</small></div></div>
         <form onSubmit={save} className="login-form">
           <label>Họ tên<input value={name} onChange={e=>setName(e.target.value)} placeholder="Tên của bạn"/></label>
-          <label>Email<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com"/></label>
+          <label>Email<input type="email" value={email} disabled placeholder="you@example.com"/></label>
           <label>Số điện thoại<input value={phone} onChange={e=>setPhone(e.target.value)} placeholder="0901 234 567"/></label>
           <label>Địa chỉ giao hàng<input value={address} onChange={e=>setAddress(e.target.value)} placeholder="Số nhà, đường, quận/thành phố"/></label>
           <button className="primary login-submit" type="submit">Lưu thay đổi</button>
@@ -374,7 +455,7 @@ function Profile({lastOrder}){
       </div>
       <div>
         <div className="panel" style={{marginBottom:18}}>
-          <div className="panel-head"><div><b>Đơn hàng gần nhất</b><span>{lastOrder ? "Đơn hàng vừa đặt" : "Chưa có đơn hàng"}</span></div></div>
+          <div className="panel-head"><div><b>Đơn hàng gần nhất</b><span>{lastOrder ? "Đơn hàng vừa đặt" : "Chưa có đơn hàng"}</span></div><a href="#/orders">Xem tất cả</a></div>
           {lastOrder
             ? <div className="order-mini"><div className="avatar">{initials}</div><div><b>#{lastOrder.id}</b><small>{lastOrder.count} sản phẩm</small></div><strong>{money(lastOrder.total)}</strong><span className="status done">Đã đặt</span></div>
             : <p className="muted" style={{margin:0}}>Bạn chưa có đơn hàng nào gần đây.</p>}
@@ -386,9 +467,69 @@ function Profile({lastOrder}){
             <div><b>Hotline</b><p>1900 8888</p></div>
           </div>
         </div>
+        <ChangePassword/>
       </div>
     </div>
   </div></main>
+}
+
+function ChangePassword(){
+  const [cur,setCur]=useState("");
+  const [next,setNext]=useState("");
+  const [again,setAgain]=useState("");
+  const [msg,setMsg]=useState(null);
+  const submit=async e=>{
+    e.preventDefault();
+    if(next!==again){ setMsg({ok:false,text:"Mật khẩu nhập lại không khớp"}); return; }
+    try{
+      const {token}=await api("/auth/change-password",{method:"POST",body:{currentPassword:cur,newPassword:next}});
+      setToken("customer",token);
+      setCur("");setNext("");setAgain("");
+      setMsg({ok:true,text:"Đã đổi mật khẩu"});
+    }catch(err){ setMsg({ok:false,text:err.message}); }
+  };
+  return <div className="panel" style={{marginTop:18}}>
+    <div className="panel-head"><div><b>Đổi mật khẩu</b><span>Tối thiểu 6 ký tự. Các thiết bị khác sẽ bị đăng xuất</span></div></div>
+    <form onSubmit={submit} className="login-form">
+      <label>Mật khẩu hiện tại<input type="password" value={cur} onChange={e=>{setCur(e.target.value);setMsg(null)}} autoComplete="current-password"/></label>
+      <label>Mật khẩu mới<input type="password" value={next} onChange={e=>{setNext(e.target.value);setMsg(null)}} autoComplete="new-password"/></label>
+      <label>Nhập lại mật khẩu mới<input type="password" value={again} onChange={e=>{setAgain(e.target.value);setMsg(null)}} autoComplete="new-password"/></label>
+      <button className="primary login-submit" type="submit" disabled={!cur||!next||!again}>Cập nhật mật khẩu</button>
+      {msg&&<div className="login-error" style={msg.ok?{background:"#edf5e7",color:"#648044"}:undefined}>{msg.text}</div>}
+    </form>
+  </div>
+}
+
+function ResetPassword(){
+  const token=new URLSearchParams(window.location.search).get("token")||"";
+  const [password,setPassword]=useState("");
+  const [again,setAgain]=useState("");
+  const [error,setError]=useState("");
+  const [done,setDone]=useState(false);
+  const submit=async e=>{
+    e.preventDefault();
+    if(password!==again){ setError("Mật khẩu nhập lại không khớp"); return; }
+    try{ await api("/auth/reset-password",{method:"POST",body:{token,password}}); setDone(true); }
+    catch(err){ setError(err.message); }
+  };
+  return <main className="login-page" style={{gridTemplateColumns:"1fr"}}>
+    <section className="login-card-wrap">
+      <a href="/" className="logo login-logo"><span className="logo-mark">H</span>HAI</a>
+      <div className="login-card">
+        <div className="login-heading"><span className="eyebrow">RESET PASSWORD</span><h2>Đặt lại mật khẩu</h2><p>{done ? "Mật khẩu đã được cập nhật." : "Nhập mật khẩu mới cho tài khoản của bạn"}</p></div>
+        {done
+          ? <a className="primary login-submit" href="/login">Đến trang đăng nhập <ArrowRight size={18}/></a>
+          : !token
+          ? <div className="login-error">Liên kết không hợp lệ</div>
+          : <form onSubmit={submit} className="login-form">
+              <label>Mật khẩu mới<input type="password" autoFocus value={password} onChange={e=>{setPassword(e.target.value);setError("")}} autoComplete="new-password"/></label>
+              <label>Nhập lại mật khẩu<input type="password" value={again} onChange={e=>{setAgain(e.target.value);setError("")}} autoComplete="new-password"/></label>
+              {error&&<div className="login-error">{error}</div>}
+              <button className="primary login-submit" type="submit" disabled={!password||!again}>Đặt lại mật khẩu <ArrowRight size={18}/></button>
+            </form>}
+      </div>
+    </section>
+  </main>
 }
 
 function Home({products,onAdd,onWish,wishlist,stock}){
@@ -424,20 +565,41 @@ function ShopFilters({priceRange,setPriceRange,ratingMin,setRatingMin}){
   </aside>
 }
 
-function Shop({products:items,category,onAdd,onWish,wishlist,stock}){
+function Pagination({page,totalPages,hrefFor}){
+  if(totalPages<=1) return null;
+  const nums=[];
+  for(let i=1;i<=totalPages;i++){
+    if(i===1||i===totalPages||Math.abs(i-page)<=1) nums.push(i);
+    else if(nums[nums.length-1]!=="…") nums.push("…");
+  }
+  const top=()=>window.scrollTo({top:0,behavior:"smooth"});
+  return <nav className="pagination" aria-label="Phân trang">
+    {page>1 ? <a href={hrefFor(page-1)} onClick={top} title="Trang trước"><ChevronLeft size={16}/></a> : <span className="disabled"><ChevronLeft size={16}/></span>}
+    {nums.map((n,i)=>n==="…" ? <span key={"e"+i} className="dots">…</span> : <a key={n} href={hrefFor(n)} onClick={top} className={n===page?"active":""} aria-current={n===page?"page":undefined}>{n}</a>)}
+    {page<totalPages ? <a href={hrefFor(page+1)} onClick={top} title="Trang sau"><ChevronRight size={16}/></a> : <span className="disabled"><ChevronRight size={16}/></span>}
+  </nav>
+}
+
+function Shop({products:items,category,q="",page=1,onAdd,onWish,wishlist,stock}){
   const [sort,setSort]=useState("featured");
   const [priceRange,setPriceRange]=useState(null);
   const [ratingMin,setRatingMin]=useState(0);
   const filtered=items.filter(p=>(stock?.[p.id]??1)>0 && (!priceRange || (p.price>=priceRange.min && p.price<=priceRange.max)) && p.rating>=ratingMin);
   const sorted=[...filtered].sort((a,b)=>sort==="low"?a.price-b.price:sort==="high"?b.price-a.price:0);
+  const totalPages=Math.max(1,Math.ceil(sorted.length/PAGE_SIZE));
+  const cur=Math.min(page,totalPages);
+  const pageItems=sorted.slice((cur-1)*PAGE_SIZE,cur*PAGE_SIZE);
+  const hrefFor=n=>shopHref({cat:category,q,page:n});
+  const backToFirst=()=>{ if(page>1) window.location.hash=hrefFor(1); };
   return <main className="shop-page"><div className="container">
-    <div className="shop-top"><div><span className="eyebrow">SHOP</span><h1>{category||"Tất cả sản phẩm"}</h1><p>{sorted.length} sản phẩm được tuyển chọn</p></div><select value={sort} onChange={e=>setSort(e.target.value)}><option value="featured">Nổi bật</option><option value="low">Giá thấp → cao</option><option value="high">Giá cao → thấp</option></select></div>
+    <div className="shop-top"><div><span className="eyebrow">{q?"SEARCH":"SHOP"}</span><h1>{q?`Kết quả cho “${q}”`:(category||"Tất cả sản phẩm")}</h1><p>{q?`Tìm thấy ${sorted.length} sản phẩm`:`${sorted.length} sản phẩm được tuyển chọn`}{q && <> · <a className="text-link inline" href={shopHref({cat:category})}>Xóa tìm kiếm</a></>}</p></div><select value={sort} onChange={e=>{setSort(e.target.value);backToFirst()}}><option value="featured">Nổi bật</option><option value="low">Giá thấp → cao</option><option value="high">Giá cao → thấp</option></select></div>
     <div className="shop-layout">
-      <ShopFilters priceRange={priceRange} setPriceRange={setPriceRange} ratingMin={ratingMin} setRatingMin={setRatingMin}/>
+      <ShopFilters priceRange={priceRange} setPriceRange={v=>{setPriceRange(v);backToFirst()}} ratingMin={ratingMin} setRatingMin={v=>{setRatingMin(v);backToFirst()}}/>
       <div className="shop-content">
-        <div className="category-pills"><a href="#/shop" className={!category?"active":""}>Tất cả</a>{["Thời trang","Giày","Phụ kiện"].map(c=><a className={category===c?"active":""} key={c} href={`#/shop?cat=${encodeURIComponent(c)}`}>{c}</a>)}</div>
-        <div className="product-grid">{sorted.map(p=><ProductCard key={p.id} p={p} onAdd={onAdd} onWish={onWish} wished={wishlist.includes(p.id)} stock={stock?.[p.id]}/>)}</div>
-        {!sorted.length && <p className="filter-empty">Không có sản phẩm phù hợp với bộ lọc.</p>}
+        <div className="category-pills"><a href={shopHref({q})} className={!category?"active":""}>Tất cả</a>{["Thời trang","Giày","Phụ kiện"].map(c=><a className={category===c?"active":""} key={c} href={shopHref({cat:c,q})}>{c}</a>)}</div>
+        <div className="product-grid">{pageItems.map(p=><ProductCard key={p.id} p={p} onAdd={onAdd} onWish={onWish} wished={wishlist.includes(p.id)} stock={stock?.[p.id]}/>)}</div>
+        {!sorted.length && <p className="filter-empty">{q?`Không tìm thấy sản phẩm nào cho “${q}”. Thử từ khóa khác nhé.`:"Không có sản phẩm phù hợp với bộ lọc."}</p>}
+        <Pagination page={cur} totalPages={totalPages} hrefFor={hrefFor}/>
       </div>
     </div>
   </div></main>
@@ -502,7 +664,7 @@ function CartPage({cart,setQty,removeFromCart,onCheckout}){
               {shipping>0 && !applied?.freeship && <div className="promo-hint">Mua thêm {money(1000000-subtotal)} để được miễn phí vận chuyển</div>}
               <div className="total"><span>Tổng cộng</span><b>{money(finalTotal)}</b></div>
             </div>
-            <button className="primary full" disabled={!cart.length} onClick={()=>onCheckout(finalTotal,cart)}>Thanh toán <ArrowRight size={18}/></button>
+            <button className="primary full" disabled={!cart.length} onClick={()=>onCheckout(finalTotal,cart,applied?.code)}>Thanh toán <ArrowRight size={18}/></button>
           </aside>
         </div>}
   </div></main>
@@ -512,18 +674,19 @@ function Admin(){
   const [section,setSection]=useState("overview");
   const [notice,setNotice]=useState("");
   const [showAdd,setShowAdd]=useState(false);
-  const [inventory,setInventory]=useLocalState("hai_products",seedProducts);
-  const [stock,setStock]=useLocalState("hai_stock",defaultStock);
+  const {data:catalog,reload:reloadCatalog}=useFetch("/products",[],true);
+  const inventory=useMemo(()=>catalog.map(({stock:_s,...p})=>p),[catalog]);
+  const stock=useMemo(()=>Object.fromEntries(catalog.map(p=>[p.id,p.stock])),[catalog]);
   const nav=[
     ["overview","Tổng quan",LayoutDashboard],["orders","Đơn hàng",ShoppingBag],["products","Sản phẩm",Package],["customers","Khách hàng",Users],["analytics","Phân tích",BarChart3]
   ];
-  return <div className="admin-shell"><aside className="admin-side"><a href="#/" className="logo admin-logo"><span className="logo-mark">H</span>HAI</a><div className="admin-label">QUẢN TRỊ</div>{nav.map(([id,label,Icon])=><button key={id} className={section===id?"admin-nav active":"admin-nav"} onClick={()=>setSection(id)}><Icon size={18}/>{label}</button>)}<div className="side-bottom"><button className="admin-nav" onClick={()=>{localStorage.removeItem("hai_admin_auth");window.location.href="/admin/login"}}><LogOut size={18}/>Đăng xuất</button></div></aside><main className="admin-main"><div className="admin-top"><div><span className="eyebrow">MONDAY · 11 SEPTEMBER 2026</span><h1>{nav.find(x=>x[0]===section)?.[1]}</h1></div><div className="admin-user"><button className="icon-btn"><Bell size={18}/></button></div></div>{section==="overview"&&<Dashboard inventory={inventory}/>} {section==="orders"&&<Orders/>}{section==="products"&&<Products inventory={inventory} setInventory={setInventory} stock={stock} setStock={setStock} openAdd={()=>setShowAdd(true)}/>} {section==="customers"&&<Customers/>}{section==="analytics"&&<Analytics inventory={inventory}/>}</main>{showAdd&&<AddProduct close={()=>setShowAdd(false)} add={(p,qty)=>{const id=Date.now();setInventory(x=>[{...p,id},...x]);setStock(s=>({...s,[id]:qty}));setShowAdd(false);setNotice("Đã thêm sản phẩm mới")}}/>}{notice&&<div className="toast"><Check size={18}/>{notice}</div>}</div>
+  return <div className="admin-shell"><aside className="admin-side"><a href="#/" className="logo admin-logo"><span className="logo-mark">H</span>HAI</a><div className="admin-label">QUẢN TRỊ</div>{nav.map(([id,label,Icon])=><button key={id} className={section===id?"admin-nav active":"admin-nav"} onClick={()=>setSection(id)}><Icon size={18}/>{label}</button>)}<div className="side-bottom"><button className="admin-nav" onClick={()=>{clearSession("admin");window.location.href="/admin/login"}}><LogOut size={18}/>Đăng xuất</button></div></aside><main className="admin-main"><div className="admin-top"><div><span className="eyebrow">MONDAY · 11 SEPTEMBER 2026</span><h1>{nav.find(x=>x[0]===section)?.[1]}</h1></div><div className="admin-user"><button className="icon-btn"><Bell size={18}/></button></div></div>{section==="overview"&&<Dashboard inventory={inventory}/>} {section==="orders"&&<Orders/>}{section==="products"&&<Products inventory={inventory} stock={stock} reload={reloadCatalog} openAdd={()=>setShowAdd(true)}/>} {section==="customers"&&<Customers/>}{section==="analytics"&&<Analytics inventory={inventory}/>}</main>{showAdd&&<AddProduct close={()=>setShowAdd(false)} add={async(p,qty)=>{try{await api("/products",{method:"POST",admin:true,body:{...p,stock:qty}});reloadCatalog();setShowAdd(false);setNotice("Đã thêm sản phẩm mới")}catch(err){setNotice(err.message)}}}/>}{notice&&<div className="toast"><Check size={18}/>{notice}</div>}</div>
 }
 
 function monthKey(d){ return d.getFullYear()+"-"+(d.getMonth()+1); }
 
 function Dashboard({inventory}){
-  const [orders]=useLocalState("hai_orders",[]);
+  const {data:orders}=useFetch("/orders",[],true);
   const [metric,setMetric]=useState("revenue");
   const now=new Date();
   const months=[...Array(6)].map((_,i)=>{
@@ -561,11 +724,15 @@ function Dashboard({inventory}){
 function OrderMini({name,code,price,status}){return <div className="order-mini"><div className="avatar">{name.split(" ").map(x=>x[0]).slice(-2).join("")}</div><div><b>{name}</b><small>{code}</small></div><strong>{price}</strong><span className={`status ${status==="Đã giao"?"done":status==="Đang giao"?"shipping":""}`}>{status}</span></div>}
 
 function Orders(){
-  const [orders,setOrders]=useLocalState("hai_orders",[]);
+  const {data:orders,setData:setOrders}=useFetch("/orders",[],true);
   const [statusFilter,setStatusFilter]=useState("all");
   const [daysFilter,setDaysFilter]=useState("all");
   const statusClass=s=>s==="Đã giao"?"done":s==="Đang giao"?"shipping":"";
-  const updateStatus=(id,status)=>setOrders(list=>list.map(o=>o.id===id?{...o,status}:o));
+  const updateStatus=(id,status)=>{
+    const prev=orders;
+    setOrders(list=>list.map(o=>o.id===id?{...o,status}:o));
+    api(`/orders/${id}/status`,{method:"PATCH",admin:true,body:{status}}).catch(()=>setOrders(prev));
+  };
   const now=Date.now();
   const filtered=orders.filter(o=>{
     if(statusFilter!=="all" && (o.status||"Chờ xử lý")!==statusFilter) return false;
@@ -604,7 +771,7 @@ function Orders(){
   </div>
 }
 
-function Products({inventory,setInventory,stock,setStock,openAdd}){
+function Products({inventory,stock,reload,openAdd}){
   const [editing,setEditing]=useState(null);
   return <div className="panel table-panel">
     <div className="panel-head"><div><b>Kho sản phẩm</b><span>{inventory.length} sản phẩm</span></div><button className="primary small" onClick={openAdd}><Plus size={16}/> Thêm sản phẩm</button></div>
@@ -617,16 +784,42 @@ function Products({inventory,setInventory,stock,setStock,openAdd}){
           <td>{money(p.price)}</td>
           <td>{qty}</td>
           <td><span className={`status ${qty>0?"done":""}`}>{qty>0?"Đang bán":"Hết hàng"}</span></td>
-          <td><div className="row-actions"><button className="more" onClick={()=>setEditing(p)} title="Sửa sản phẩm"><Pencil size={15}/></button><button className="more" onClick={()=>setInventory(x=>x.filter(y=>y.id!==p.id))} title="Xóa sản phẩm"><Trash2 size={15}/></button></div></td>
+          <td><div className="row-actions"><button className="more" onClick={()=>setEditing(p)} title="Sửa sản phẩm"><Pencil size={15}/></button><button className="more" onClick={()=>api(`/products/${p.id}`,{method:"DELETE",admin:true}).then(reload).catch(e=>alert(e.message))} title="Xóa sản phẩm"><Trash2 size={15}/></button></div></td>
         </tr>
       })}</tbody>
     </table>
     {editing && <EditProduct product={editing} stockQty={stock[editing.id]??0} close={()=>setEditing(null)} save={(fields,qty)=>{
-      setInventory(list=>list.map(x=>x.id===editing.id ? {...x,...fields} : x));
-      setStock(s=>({...s,[editing.id]:qty}));
-      setEditing(null);
+      api(`/products/${editing.id}`,{method:"PUT",admin:true,body:{...fields,stock:qty}}).then(()=>{reload();setEditing(null)}).catch(e=>alert(e.message));
     }}/>}
   </div>
+}
+
+function ImageField({value,onChange}){
+  const fileRef=useRef(null);
+  const [busy,setBusy]=useState(false);
+  const [err,setErr]=useState("");
+  const pick=async e=>{
+    const f=e.target.files?.[0];
+    e.target.value="";
+    if(!f) return;
+    if(!/^image\/(jpeg|png|webp|gif)$/.test(f.type)) return setErr("Chỉ nhận ảnh JPG, PNG, WEBP hoặc GIF");
+    if(f.size>5*1024*1024) return setErr("Ảnh tối đa 5MB");
+    setBusy(true); setErr("");
+    try{ onChange(await uploadImage(f)); }
+    catch(ex){ setErr(ex.message); }
+    finally{ setBusy(false); }
+  };
+  return <>
+    <label>Ảnh sản phẩm
+      <div className="image-input">
+        <input value={value} onChange={e=>onChange(e.target.value)} placeholder="Dán URL ảnh hoặc bấm Tải ảnh lên"/>
+        <button type="button" className="secondary" disabled={busy} onClick={()=>fileRef.current?.click()}>{busy?"Đang tải...":"Tải ảnh lên"}</button>
+      </div>
+    </label>
+    <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden onChange={pick}/>
+    {err && <small className="image-error">{err}</small>}
+    {value && <div className="image-preview"><img key={value} src={value} alt="Xem trước" onError={e=>e.target.style.display="none"}/></div>}
+  </>
 }
 
 function EditProduct({product,stockQty,close,save}){
@@ -647,8 +840,7 @@ function EditProduct({product,stockQty,close,save}){
   return <div className="modal-bg"><div className="modal">
     <div className="modal-head"><div><span className="eyebrow">INVENTORY</span><h2>Sửa sản phẩm</h2></div><button className="icon-btn" onClick={close}><X/></button></div>
     <label>Tên sản phẩm<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ví dụ: Urban Shirt"/></label>
-    <label>Ảnh sản phẩm (URL)<input value={image} onChange={e=>setImage(e.target.value)} placeholder="https://..."/></label>
-    {image && <div className="image-preview"><img src={image} alt="Xem trước" onError={e=>e.target.style.display="none"}/></div>}
+    <ImageField value={image} onChange={setImage}/>
     <div className="field-row">
       <label>Giá gốc<input value={oldPrice} onChange={e=>{setOldPrice(e.target.value.replace(/[^0-9]/g,""));if(discount) applyDiscount(discount);}} placeholder="1290000"/></label>
       <label>Giá bán (sau giảm)<input value={price} onChange={e=>setPrice(e.target.value.replace(/[^0-9]/g,""))} placeholder="990000"/></label>
@@ -677,7 +869,7 @@ function EditProduct({product,stockQty,close,save}){
 }
 
 function Customers(){
-  const [orders]=useLocalState("hai_orders",[]);
+  const {data:orders}=useFetch("/orders",[],true);
   const [search,setSearch]=useState("");
   const map=new Map();
   orders.forEach(o=>{
@@ -714,7 +906,7 @@ function Customers(){
 }
 
 function Analytics({inventory}){
-  const [orders]=useLocalState("hai_orders",[]);
+  const {data:orders}=useFetch("/orders",[],true);
   const revenue=orders.reduce((s,o)=>s+o.total,0);
   const avgOrder=orders.length ? revenue/orders.length : 0;
   const delivered=orders.filter(o=>o.status==="Đã giao").length;
@@ -775,8 +967,7 @@ function AddProduct({close,add}){
   return <div className="modal-bg"><div className="modal">
     <div className="modal-head"><div><span className="eyebrow">INVENTORY</span><h2>Thêm sản phẩm</h2></div><button className="icon-btn" onClick={close}><X/></button></div>
     <label>Tên sản phẩm<input value={name} onChange={e=>setName(e.target.value)} placeholder="Ví dụ: Urban Shirt"/></label>
-    <label>Ảnh sản phẩm (URL)<input value={image} onChange={e=>setImage(e.target.value)} placeholder="https://..."/></label>
-    {image && <div className="image-preview"><img src={image} alt="Xem trước" onError={e=>e.target.style.display="none"}/></div>}
+    <ImageField value={image} onChange={setImage}/>
     <div className="field-row">
       <label>Giá gốc<input value={oldPrice} onChange={e=>{setOldPrice(e.target.value.replace(/[^0-9]/g,""));if(discount) applyDiscount(discount);}} placeholder="1290000"/></label>
       <label>Giá bán (sau giảm)<input value={price} onChange={e=>setPrice(e.target.value.replace(/[^0-9]/g,""))} placeholder="990000"/></label>
@@ -815,6 +1006,7 @@ function App(){
   if(adminPath && window.location.pathname==="/admin/login") return <Login admin/>;
   if(adminPath && !adminAuthed){ window.location.replace("/admin/login"); return null; }
   if(adminPath) return <Admin/>;
+  if(window.location.pathname==="/reset-password") return <ResetPassword/>;
   if(window.location.pathname==="/login") return <Login/>;
   return <Customer cart={cart} setCart={setCart} customerAuthed={customerAuthed}/>;
 }
